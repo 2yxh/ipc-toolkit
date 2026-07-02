@@ -121,10 +121,12 @@ struct TrustRegion {
     /// @param mesh The collision mesh.
     /// @param x Current vertex positions.
     /// @param dx Proposed vertex displacements (modified in-place).
+    /// @param min_distance Minimum separation distance between elements.
     void planar_filter_step(
         const CollisionMesh& mesh,
         Eigen::ConstRef<Eigen::MatrixXd> x,
-        Eigen::Ref<Eigen::MatrixXd> dx);
+        Eigen::Ref<Eigen::MatrixXd> dx,
+        const double min_distance = 0.0);
 
 private:
     /// @brief Compute the truncation ratio for a vertex given a division plane.
@@ -143,6 +145,19 @@ private:
         Eigen::ConstRef<VectorMax3d> dx_u,
         Eigen::ConstRef<VectorMax3d> n,
         Eigen::ConstRef<VectorMax3d> p) const;
+
+    /// @brief Compute the truncation ratio for a one-sided offset plane.
+    ///
+    /// If positive_side is true, x_u must remain in the half-space
+    /// (x_u - p)·n >= 0. Otherwise it must remain in (x_u - p)·n <= 0.
+    /// Vertices already inside the forbidden half-space are allowed to move
+    /// out, but are clamped to zero if they move farther in.
+    double planar_truncation_ratio_offset(
+        Eigen::ConstRef<VectorMax3d> x_u,
+        Eigen::ConstRef<VectorMax3d> dx_u,
+        Eigen::ConstRef<VectorMax3d> n,
+        Eigen::ConstRef<VectorMax3d> p,
+        bool positive_side) const;
 };
 
 } // namespace ipc::ogc

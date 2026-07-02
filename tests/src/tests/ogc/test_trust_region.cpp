@@ -315,6 +315,36 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "planar_filter_step: approaching vertex preserves min distance",
+    "[ogc][planar_dat][clearance]")
+{
+    const double gap = 0.5;
+    const double dhat = 0.6;
+    const double min_distance = 0.2;
+    auto [mesh, V] = make_fv_mesh(gap);
+
+    ipc::ogc::TrustRegion tr(dhat);
+    ipc::NormalCollisions collisions;
+    collisions.set_collision_set_type(
+        ipc::NormalCollisions::CollisionSetType::OGC);
+    tr.update(mesh, V, collisions, min_distance);
+
+    REQUIRE(!collisions.empty());
+
+    Eigen::MatrixXd x = V;
+    Eigen::MatrixXd dx = Eigen::MatrixXd::Zero(V.rows(), 3);
+    dx.row(3) << 0.0, -0.6, 0.0;
+
+    tr.planar_filter_step(mesh, x, dx, min_distance);
+
+    const double final_tri_y = x(0, 1) + dx(0, 1);
+    const double final_vertex_y = x(3, 1) + dx(3, 1);
+    CHECK(final_vertex_y - final_tri_y >= min_distance);
+    CHECK(dx(3, 1) > -0.6);
+    CHECK(dx(3, 1) < 0.0);
+}
+
+TEST_CASE(
     "planar_filter_step: preserves more displacement than isotropic for "
     "separating pair",
     "[ogc][planar_dat]")
@@ -475,6 +505,37 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "planar_filter_step: vertex-vertex approaching pair preserves min distance",
+    "[ogc][planar_dat][clearance]")
+{
+    const double gap = 0.5;
+    const double dhat = 0.6;
+    const double min_distance = 0.2;
+    auto [mesh, V] = make_vv_mesh(gap);
+
+    ipc::ogc::TrustRegion tr(dhat);
+    ipc::NormalCollisions collisions;
+    collisions.set_collision_set_type(
+        ipc::NormalCollisions::CollisionSetType::OGC);
+    tr.update(mesh, V, collisions, min_distance);
+
+    REQUIRE(!tr.candidates.vv_candidates.empty());
+
+    Eigen::MatrixXd x = V;
+    Eigen::MatrixXd dx = Eigen::MatrixXd::Zero(V.rows(), 3);
+    dx.row(0) << 0.0, 0.4, 0.0;
+    dx.row(1) << 0.0, -0.4, 0.0;
+
+    tr.planar_filter_step(mesh, x, dx, min_distance);
+
+    const double final_gap =
+        (x(1, 1) + dx(1, 1)) - (x(0, 1) + dx(0, 1));
+    CHECK(final_gap >= min_distance);
+    CHECK(std::abs(dx(0, 1)) < 0.4);
+    CHECK(std::abs(dx(1, 1)) < 0.4);
+}
+
+TEST_CASE(
     "planar_filter_step: edge-vertex approaching pair is truncated",
     "[ogc][planar_dat]")
 {
@@ -509,6 +570,39 @@ TEST_CASE(
     dx_tan.row(2) << 0.3, 0.0, 0.0; // tangential (within inflation radius)
     tr.planar_filter_step(mesh, x, dx_tan);
     CHECK(dx_tan(2, 0) == Catch::Approx(0.3)); // not truncated
+}
+
+TEST_CASE(
+    "planar_filter_step: edge-edge approaching pair preserves min distance",
+    "[ogc][planar_dat][clearance]")
+{
+    const double gap = 0.5;
+    const double dhat = 0.6;
+    const double min_distance = 0.2;
+    auto [mesh, V] = make_ee_mesh(gap);
+
+    ipc::ogc::TrustRegion tr(dhat);
+    ipc::NormalCollisions collisions;
+    collisions.set_collision_set_type(
+        ipc::NormalCollisions::CollisionSetType::OGC);
+    tr.update(mesh, V, collisions, min_distance);
+
+    REQUIRE(!collisions.empty());
+
+    Eigen::MatrixXd x = V;
+    Eigen::MatrixXd dx = Eigen::MatrixXd::Zero(V.rows(), 3);
+    dx.row(0) << 0.0, 0.4, 0.0;
+    dx.row(1) << 0.0, 0.4, 0.0;
+    dx.row(2) << 0.0, -0.4, 0.0;
+    dx.row(3) << 0.0, -0.4, 0.0;
+
+    tr.planar_filter_step(mesh, x, dx, min_distance);
+
+    const double ea_y = x(0, 1) + dx(0, 1);
+    const double eb_y = x(2, 1) + dx(2, 1);
+    CHECK(eb_y - ea_y >= min_distance);
+    CHECK(std::abs(dx(0, 1)) < 0.4);
+    CHECK(std::abs(dx(2, 1)) < 0.4);
 }
 
 TEST_CASE(

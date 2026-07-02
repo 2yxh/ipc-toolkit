@@ -212,12 +212,15 @@ void TrustRegion::filter_step(
 void TrustRegion::planar_filter_step(
     const CollisionMesh& mesh,
     Eigen::ConstRef<Eigen::MatrixXd> x,
-    Eigen::Ref<Eigen::MatrixXd> dx)
+    Eigen::Ref<Eigen::MatrixXd> dx,
+    const double min_distance)
 {
     assert(x.rows() == dx.rows() && x.cols() == dx.cols());
     assert(relaxed_radius_scaling > 0 && relaxed_radius_scaling < 1);
+    assert(min_distance >= 0);
 
     const int d = x.cols();
+    const double clearance = std::max(min_distance, 0.0);
 
     // Collision mesh vertex positions (may differ from x if hidden DOFs exist)
     const bool has_hidden_dofs = x.rows() != mesh.num_vertices();
@@ -301,7 +304,7 @@ void TrustRegion::planar_filter_step(
             ? 0.5
             : delta_second / (delta_first + delta_second);
 
-        // Point on the division plane: p = c_second + λ·dv
+        // Point on the zero-thickness division plane: p = c_second + λ·dv
         // (λ=0 → plane at second prim, λ=1 → plane at first prim).
         const VectorMax3d p = c_second + lambda * dv;
 
@@ -310,7 +313,31 @@ void TrustRegion::planar_filter_step(
             const int fid = to_full(ids[j]);
             Eigen::ConstRef<VectorMax3d> xj = pos.segment(j * d, d);
             Eigen::ConstRef<VectorMax3d> dxj = dx.row(fid);
-            const double t_val = planar_truncation_ratio(xj, dxj, n, p);
+            double t_val = 1.0;
+            if (clearance > 0.0) {
+                if (coeffs[j] > 0) {
+                    // First primitive lives on the positive side of n. Shift
+                    // its plane away from the second primitive by its share of
+                    // the requested clearance. If only the first primitive is
+                    // moving toward contact then lambda=0 and it receives the
+                    // full offset; if only the second moves then lambda=1 and
+                    // this side is unshifted.
+                    const VectorMax3d p_first =
+                        p + (1.0 - lambda) * clearance * n;
+                    t_val = planar_truncation_ratio_offset(
+                        xj, dxj, n, p_first, /*positive_side=*/true);
+                } else if (coeffs[j] < 0) {
+                    // Second primitive lives on the negative side of n.
+                    const VectorMax3d p_second =
+                        p - lambda * clearance * n;
+                    t_val = planar_truncation_ratio_offset(
+                        xj, dxj, n, p_second, /*positive_side=*/false);
+                } else {
+                    continue;
+                }
+            } else {
+                t_val = planar_truncation_ratio(xj, dxj, n, p);
+            }
             double old_val = t_v_atomic[fid].load(std::memory_order_relaxed);
             while (t_val < old_val
                    && !t_v_atomic[fid].compare_exchange_weak(
@@ -382,6 +409,59 @@ double TrustRegion::planar_truncation_ratio(
         return 1.0;
     }
     return relaxed_radius_scaling * t_i;
+}
+
+double TrustRegion::planar_truncation_ratio_offset(
+    Eigen::ConstRef<VectorMax3d> x_u,
+    Eigen::ConstRef<VectorMax3d> dx_u,
+    Eigen::ConstRef<VectorMax3d> n,
+    Eigen::ConstRef<VectorMax3d> p,
+    bool positive_side) const
+{
+    const double signed_distance = (x_u - p).dot(n);
+    const double signed_step = dx_u.dot(n);
+    constexpr double DIST_EPS = 1e-12;
+    constexpr double STEP_EPS = 1e-15;
+
+    if (positive_side) {
+        // Valid side: signed_distance >= 0. Moving farther positive is safe.
+        if (signed_distance >= -DIST_EPS) {
+            if (signed_step >= -STEP_EPS) {
+                return 1.0;
+            }
+            const double t_i = -signed_distance / signed_step;
+            if (t_i <= 1e-10) {
+                return 0.0;
+            }
+            if (t_i >= 1.0 / relaxed_radius_scaling) {
+                return 1.0;
+            }
+            return relaxed_radius_scaling * t_i;
+        }
+
+        // Already inside the forbidden half-space. Permit separating motion,
+        // but disallow any motion that pushes farther in.
+        return signed_step > 0.0 ? 1.0 : 0.0;
+    }
+
+    // Negative side: signed_distance <= 0. Moving farther negative is safe.
+    if (signed_distance <= DIST_EPS) {
+        if (signed_step <= STEP_EPS) {
+            return 1.0;
+        }
+        const double t_i = -signed_distance / signed_step;
+        if (t_i <= 1e-10) {
+            return 0.0;
+        }
+        if (t_i >= 1.0 / relaxed_radius_scaling) {
+            return 1.0;
+        }
+        return relaxed_radius_scaling * t_i;
+    }
+
+    // Already inside the forbidden half-space. Permit separating motion, but
+    // disallow any motion that pushes farther in.
+    return signed_step < 0.0 ? 1.0 : 0.0;
 }
 
 } // namespace ipc::ogc
